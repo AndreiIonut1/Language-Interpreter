@@ -2,239 +2,313 @@ module Parser
 where
 
 import Util
-import Data.Maybe
 import InferenceDataType
 import ClassState
+import TextProcessing
+import Data.Maybe
 import qualified Data.Map as Map
-import Debug.Trace
 
--- Definire Program
+--Un program este un map de la numele clasei la containerul de clasa
 type Program = Map.Map String ClassState
 
+--Intoarce un program gol
+--Un program gol va contine clasa Global cu parintele Global.
+--Initial containerul pentru Global este si el gol.
 initEmptyProgram :: Program
 initEmptyProgram = Map.insert "Global" (setParent initEmptyClass "Global") Map.empty
 
+--Intoarce toate variabilele din program. 
+--Toate variabilele sunt stocate in clasa Global.
+--"Global" exista mereu, deci Map.lookup nu va intoarce Nothing
 getVars :: Program -> [[String]]
-getVars program = getValues  (fromJust $ Map.lookup "Global" program) Var
-                    
+getVars program = getValues (fromJust $ Map.lookup "Global" program) Var
+            
+--Intoarce toate clasele din program
 getClasses :: Program -> [String]
-getClasses program = Map.keys program
+getClasses program = Map.keys program -- clasele sunt cheile
 
+--Intoarce clasa parinte a unei clase din program
+--Determinam containerul de clasa asociat cu numele "className"
+--si intoarcem al doilea element al perechii.
+--In cazul in care clasa nu exista, intoarcem sirul vid
+--Probabil ar fi fost mai potrivit sa folosim Maybe String, dar
+--nu ar respecta prototipul dat in cerinta.
 getParentClass :: String -> Program -> String
-getParentClass className program = snd $ fromJust $ Map.lookup className program
+getParentClass className program = case(Map.lookup className program) of
+                                        Just myMap -> snd myMap
+                                        Nothing -> ""
 
+--Intoarce toate functiile unei clase din program
 getFuncsForClass :: String -> Program -> [[String]]
-getFuncsForClass className program = case (Map.lookup className program) of
+getFuncsForClass className program = case (Map.lookup className program) of 
                                         Just myMap -> getValues myMap Func
-                                        Nothing -> []
+                                        Nothing -> [] --clasa nu exista, intoarcem lista vida
 
 {-
-    NewClass  nume parinte
+    NewClass  numeClasa parinteClasa
     NewVar    numeVariabila numeClasa
-    NewFunc   tipReturnat simbolClasa simbolFunctie listaTipParamString
+    NewFunc   tipReturnat simbolClasa simbolFunctie listaParam
+    Infer     numeVariabila expresie
+    NoInstr   permite tratarea usoara a cazurilor de instruciuni invalide/linii goale
 -}
-data Instruction = NoInstr |  NewClass String String | NewVar String String | NewFunc String String String [String] | Infer String Expr deriving Show
+data Instruction = NoInstr | NewClass String String | NewVar String String | 
+                   NewFunc String String String [String] | Infer String Expr deriving Show
 
-strtok :: String -> Char -> [String]
-strtok [] delim = [""]
-strtok inputString delim
-    | stringHead == delim = if null(stringTail) 
-                                then [""]
-                                else []:(strtok stringTail delim)
-    | otherwise = [[stringHead] ++ head rest] ++ tail rest
-    where
-        stringHead = head inputString
-        stringTail = tail inputString
-        rest = strtok stringTail delim   
-
-trim :: String -> String
-trim inputString = foldl combineSublists [] (filter emptyListPredicate (strtok inputString ' '))
-                        where 
-                            combineSublists acc x =  if (null acc) then x else acc ++ " " ++ x
-                            emptyListPredicate list = length list > 0
  
+--Parcurgem inputul si genereaza o lista de instructiuni
+--strtok si trim vor genera instructiunile ca sir iar
+--stringToInstruction va genera pe baza sirurilor valori de tip Instruction
+parse :: String -> [Instruction]
+parse inputString = map (stringToInstruction) (map (trim) (strtok inputString '\n'))
+                   
+--Transforma un sir in instructiunea echivalenta
+--De exemplu, "class Int extends Global" devine NewClass "Int" "Global"
 stringToInstruction :: String -> Instruction                                   
-stringToInstruction inputString = if not (null (head argumentsList)) then
-                                    case (head argumentsList) of 
+stringToInstruction inputString
+        | not (null argumentsList) = case (head argumentsList) of --determina tipul instructiunii
                                         "class" -> buildClassInstruction inputString
                                         "newvar" -> buildVarInstruction inputString
                                         "infer" -> buildInferInstruction inputString
                                         _ -> buildFuncInstruction inputString
-                                  else 
-                                    NoInstr   
-                                where
-                                     argumentsList = strtok inputString ' '      
+        | otherwise = NoInstr  -- linie goala 
+        where
+            --imparte sirul instructiunii in tokenuri
+            --de exemplu "class Int" devine ["class", "Int"]
+            argumentsList = strtok inputString ' '                      
 
-findIndex :: String -> Char -> Int
-findIndex [] c = 0
-findIndex (x:xs) c = if x == c
-                        then 0
-                        else 1 + findIndex xs c
-
-contains :: String -> Char -> Bool
-contains [] c = False
-contains (x:xs) c = if x == c
-                        then True
-                        else (contains xs c) 
-                        
-findIndexIgnoringFuncs :: String -> Char -> Int
-findIndexIgnoringFuncs l c = findIndexAux l c 0
-                             where findIndexAux [] _ _ = 0
-                                   findIndexAux (x:xs) c open = if x == ')' then 1 + (findIndexAux xs c (open - 1))
-                                                                else if  x == '(' then  1 + (findIndexAux xs c (open + 1))
-                                                                else if open > 0 then 1 + (findIndexAux xs c (open))
-                                                                else if x == c then 0
-                                                                else 1 + (findIndexAux xs c open)
-
-strtokExtended :: String -> Char -> [String]
-strtokExtended inputString delim = strtokExtendedAux inputString delim []
-                                   where
-                                        strtokExtendedAux [] delim acc = acc
-                                        strtokExtendedAux inputString delim acc
-                                            | index < length inputString = (acc ++ [(take (index) inputString)] ++ (strtokExtendedAux (drop (index + 1) inputString) delim acc))
-                                            | otherwise = acc ++ [inputString]
-                                            where
-                                                index = findIndexIgnoringFuncs inputString delim
-
-
-replaceSemicolons :: String -> String
-replaceSemicolons inputString = foldr(\x acc -> if x == ':' then ' ':acc else x:acc) [] inputString    
-
-replaceEqual :: String -> String
-replaceEqual inputString = foldr(\x acc -> if x == '=' then ' ':acc else x:acc) [] inputString                            
-
-buildArgumentsList :: String -> [String]
-buildArgumentsList inputString =  map trim (strtok parametersTemp2 ',')
-                                where 
-                                    parametersTemp1 = drop (findIndex inputString '(' + 1) inputString
-                                    parametersTemp2 = take ((length parametersTemp1) - 1) parametersTemp1
-
-buildFunctionHeader :: String -> [String]
-buildFunctionHeader inputString = strtok (head $ map trim (strtok tempHeader2 ',')) ' '
-                                where
-                                    tempHeader1 = take (findIndex inputString '(') inputString
-                                    tempHeader2 = replaceSemicolons tempHeader1
-
-buildFuncInstruction :: String -> Instruction
-buildFuncInstruction inputString = if length headerList /= 3 
-                                then NoInstr
-                                else NewFunc (headerList !! 0) (headerList !! 1) (headerList !! 2) argumentsList
-                            where
-                                 headerList    = buildFunctionHeader inputString
-                                 argumentsList = buildArgumentsList inputString      
-
-buildVarInstruction :: String -> Instruction                                 
-buildVarInstruction inputString = NewVar varName className
-                                        where
-                                            tokens = map (trim) (strtok inputString '=')
-                                            className = tokens !! 1
-                                            varName = (strtok (tokens !! 0) ' ') !! 1
-
+--Construieste instructiunea pentru a crea o noua clasa in program
 buildClassInstruction :: String -> Instruction
-buildClassInstruction inputString = NewClass (className) (classParent)
-                                where
-                                    argumentsList = strtok inputString ' '
-                                    className = argumentsList !! 1
-                                    classParent = if (length argumentsList > 2) 
-                                                    then (argumentsList !! 3) 
-                                                    else "Global"
+buildClassInstruction inputString = NewClass className classParent
+        where
+            argumentsList = strtok inputString ' '
+            -- numele clasei este al doilea element din lista
+            className     = argumentsList !! 1
+            classParent   = if (length argumentsList > 2) -- extends apare explicit
+                                then (argumentsList !! 3) --clasa parinte
+                                else "Global" --parintele default este "Global"
 
+--Construieste instructiunea pentru a crea o noua variabila in program
+buildVarInstruction :: String -> Instruction                                 
+buildVarInstruction inputString = NewVar varName varType
+        where
+            --imparte in "newvar VarName" si "varType"
+            argumentsList = map (trim) (strtok inputString '=')
+            --tipul este al doilea element din lista
+            varType       = argumentsList !! 1 
+            --imparte "newvar VarName" in ["newvar", "VarName"] si ia numele variabilei
+            varName       = (strtok (argumentsList !! 0) ' ') !! 1
+
+--Construieste instructiunea pentru a crea o noua functie in program
+buildFuncInstruction :: String -> Instruction
+buildFuncInstruction inputString = if length headerList /= 3
+                                        --functia a primit un numar invalid de argumente
+                                        then 
+                                            NoInstr
+                                        else 
+                                            NewFunc (headerList !! 0) (headerList !! 1) 
+                                                    (headerList !! 2) argumentsList
+                                    where
+                                        --headerul functiei: return clasa nume
+                                        headerList    = buildFunctionHeader inputString
+                                        --argumentele functiei
+                                        argumentsList = buildArgumentsList inputString      
+
+--Intoarce lista de argumente a functiei ca String
+buildArgumentsList :: String -> [String]
+buildArgumentsList inputString = map trim (strtok parametersTemp2 ',') --delimiteaza argumentele
+        where 
+            --extrage tot ce se afla intre ()
+            parametersTemp1 = drop (findIndex inputString '(' + 1) inputString
+            parametersTemp2 = take ((length parametersTemp1) - 1) parametersTemp1
+
+--Intoarce headerul functiei ca lista de String
+buildFunctionHeader :: String -> [String]
+buildFunctionHeader inputString = strtok (trim tempHeader2) ' '
+        where
+            --extrage tot ce se afla inainte de ()
+            tempHeader1 = take (findIndex inputString '(') inputString
+            --inlocuieste :: cu spatiu pentru a face parsarea usoara
+            tempHeader2 = replaceSemicolons tempHeader1
+
+--Construieste instructiunea pentru inferenta de tip pentru a determina tipul variabilei
+--Va converti expresia de la String la FCall
 buildInferInstruction :: String -> Instruction
-buildInferInstruction inputString = Infer newVarName (buildFCall (arguments !! 1))
-                        where
-                           arguments = strtok inputString '='
-                           newVarName  = trim $ drop (length "infer" + 1) (arguments !! 0)
+buildInferInstruction inputString = Infer newVarName (buildFCall (expression !! 1))
+        where
+            --expression reprezinta expresia ce trebuie evaluata
+            expression = strtok inputString '='
+            newVarName  = trim $ drop (length "infer" + 1) (expression !! 0)
 
 
+--Converteste o expresie de la String la FCall in mod recursiv
 buildFCall :: String -> Expr
-buildFCall inputString = if (contains inputString '.') 
-                                        then (FCall callerVarName functionName rest)
-                                        else (Va inputString)
-                                        where 
-                                            argsTemp1 = drop (findIndex inputString '(' + 1) inputString
-                                            argsTemp2 = take ((length argsTemp1) - 1) argsTemp1
-                                            arguments = map trim (strtokExtended argsTemp2 ',')
-                                            header = take (findIndex inputString '(') inputString
-                                            callPattern   = map trim (strtok (header) '.')
-                                            callerVarName = callPattern !! 0
-                                            functionName  = callPattern !! 1
-                                            rest = (map (buildFCall) arguments)
+buildFCall inputString 
+        --daca avem '.' este un apel de functiei
+        | contains inputString '.' =  FCall callerVarName functionName rest
+        --altfel avem o variabila(caz de baza)
+        | otherwise = Va inputString
+        where 
+            argsTemp1 = drop (findIndex inputString '(' + 1) inputString
+            argsTemp2 = take ((length argsTemp1) - 1) argsTemp1
+            --reprezinta argumentele functiei evaluate
+            arguments = map trim (strtokExtended argsTemp2 ',')
+            --header reprezinta var.func
+            header = take (findIndex inputString '(') inputString
+            callPattern   = map trim (strtok (header) '.')
+            --numele variabilei pe care o folosim pentru apel
+            callerVarName = callPattern !! 0
+            --numele functiei apelate
+            functionName  = callPattern !! 1
+            --argumentele apelului curent
+            --si ele trebuie convertite pe rand la FCall
+            rest = (map (buildFCall) arguments)
 
-
-parse :: String -> [Instruction]
-parse inputString = (map (stringToInstruction) (map (trim) (strtok inputString '\n')))
-
+--Interpreteaza o instructiune si o adauga in program
 interpret :: Instruction -> Program -> Program
-interpret instruction program = case instruction of
-                                    (NewClass  className classParent) -> addNewClass className classParent program
-                                    (NewVar    varName   className) -> addNewVar varName className program
-                                    (NewFunc   returnType className functionName argumentsList) -> (addNewFunc returnType className functionName argumentsList program)
-                                    (Infer     varName expr) -> case(infer expr program) of 
-                                                                    Just dataType -> interpret ((parse ("newvar " ++ varName ++ " = " ++ dataType)) !! 0) program
-                                                                    Nothing -> program
-                                                                    
-                                    NoInstr -> program
+interpret instruction program = 
+        case instruction of
+            --instructiunea pentru a adauga o clasa nou
+            (NewClass  className classParent) -> addNewClass className classParent program
+            --instructiunea pentru a adauga o variabila noua
+            (NewVar varName className) -> addNewVar varName className program
+            --instructiunea pentru a adauga o functie noua
+            (NewFunc returnType className functionName argumentsList) -> 
+                (addNewFunc returnType className functionName argumentsList program)
+            --instructiunea pentru a adauga o noua variabila al carei tip trebuie dedus
+            (Infer varName expr) -> 
+                --expr reprezinta expresia ce trebuie evaluata
+                --vom apela infer pe expresia curenta pentru a vedea
+                --daca o putem evalua cu succes
+                case(infer expr program) of 
+                    --expresia se evalueaza in mod corespunzator
+                    --construim pur si simplu o noua instructiune de tipul newVar varName = dataType
+                    --parse va lua stringul si il va transforma intr-o instructiune si apelam
+                    --interpret pentru a adauga efectiv instructiuna in program
+                    Just dataType -> interpret ((parse ("newvar " ++ varName ++ " = " ++ dataType)) !! 0) program
+                    --expresia nu are un tip valid, nu facem nicio modificare
+                    Nothing -> program
+            --nu avem nimic de executat                                                       
+            NoInstr -> program
 
+--Adauga o noua clasa in program
 addNewClass :: String -> String -> Program -> Program
 addNewClass className classParent program
-                                    | Map.member className program == False = if Map.member classParent program
-                                                                                then Map.insert className (setParent initEmptyClass classParent) program
-                                                                                else Map.insert className (setParent initEmptyClass "Global") program
-                                    | otherwise = program
+        --clasa nu exista in program, o adaugam
+        | Map.member className program == False = 
+            if Map.member classParent program
+                --clasa parinte exista
+                --construim un nou container si il asociem numelui clasei
+                then Map.insert className (setParent initEmptyClass classParent) program
+                --clasa parinte nu exista, parintele va fi "Global"
+                else Map.insert className (setParent initEmptyClass "Global") program
+        --clasa exista deja, nu facem nimic
+        | otherwise = program
 
+--Adauga o noua variabila in program
 addNewVar :: String -> String -> Program -> Program
 addNewVar varName className program
-                           | Map.member className program == True = case(Map.lookup "Global" program) of
-                                        Just myMap -> Map.insert "Global" (insertIntoClass (myMap) Var [varName, className]) program
-                           | otherwise = program
+        --clasa din care face parte variabila exista
+        | Map.member className program == True =  
+            --o inseram in clasa Global
+            Map.insert "Global" (insertIntoClass globalClassState Var [varName, className]) program
+        --incercam sa adaugam o variabila cu un tip necunoscut, nu se poate
+        | otherwise = program
+        where 
+            --clasa global exista mereu
+            globalClassState = fromJust $ Map.lookup "Global" program
 
+--Adauga o noua functie in program
 addNewFunc :: String -> String -> String -> [String] -> Program -> Program
-addNewFunc returnType className functionName argumentsList program 
-                           | Map.member className program == True = case(Map.lookup className program) of
-                                        Just myMap -> if (validateFuncArgs argumentsList program) &&  (validateRet returnType program)
-                                                        then Map.insert className (insertIntoClass (myMap) Func arguments) program
-                                                        else program
-                           | otherwise = program   
-                           where
-                           arguments = if (argumentsList /= [[]]) 
-                                        then ([functionName, returnType] ++ argumentsList)
-                                        else  ([functionName, returnType])   
+addNewFunc returnType className functionName argumentsList program = 
+        case(Map.lookup className program) of
+            --clasa in care vrem sa adaugam functia exista
+            --verificam daca argumentele si tipul returnat sunt tipuri cunoscute
+            Just myMap -> if (validateFuncArgs argumentsList program) && (validateRet returnType program)
+                            --inseram functia in program
+                            then Map.insert className (insertIntoClass (myMap) Func arguments) program
+                            --avem tipuri necunoscute, nu putem insera
+                            else program
+            --incercam sa adaugam o functie intr-o clasa care nu exista
+            Nothing -> program  
+        where
+            arguments = if (argumentsList /= [[]]) 
+                            --functia are argumente, adauga numele si tipul returnat
+                            then ([functionName, returnType] ++ argumentsList)
+                            --functia nu ia argumente, are doar un nume si tip returnat
+                            else  ([functionName, returnType])   
 
+--Verifica daca toate argumentele unei functii sunt de tip cunoscut
 validateFuncArgs :: [String] -> Program -> Bool
 validateFuncArgs argumentsList program 
-        | (argumentsList /= [""]) == True = all (\x -> validateRet x program) argumentsList
+        --verificam fiecare argument in parte folosind all
+        --all intoarce true daca toate elementele listei verifica predicatul
+        | (argumentsList /= [""]) == True = all (\arg -> validateRet arg program) argumentsList
+        --nu avem argumente, ceea ce este valid
         | otherwise = True
     
-
+--Verifica daca tipul returnat(actually any string) este de tip cunoscut
+--Tipul este valid daca exista o clasa cu numele tipului
 validateRet :: String -> Program -> Bool
 validateRet returnType program = Map.member returnType program
 
+--Evalueaza o expresie si ii determina tipul(daca este posibil)
 infer :: Expr -> Program -> Maybe String
+--Pentru o variabila tipul este stocat ca valoarea asociata numelui in clasa Global
 infer (Va varName) program = getVarClass varName (fromJust $ Map.lookup "Global" program)
-infer (FCall varName functionName arguments) program = case (infer (Va varName) program) of
-                                                          Just varClass -> case (inferResult) of
-                                                                            Just inferArgs -> checkAllBaseClasses varClass functionName inferArgs program
-                                                                            Nothing -> Nothing
-                                                          Nothing -> Nothing
-                                                       where
-                                                            inferResult = if (all (\x -> x /= Nothing) tempResult) 
-                                                                                then Just (map (fromJust) tempResult)
-                                                                                else Nothing
-                                                            tempResult  = (map (\e -> infer e program) arguments)
-                                                
-   
-checkAllBaseClasses :: String -> String -> [String] -> Program -> Maybe String                                                         
-checkAllBaseClasses "Global" functionName arguments program = findFunction "Global" functionName arguments program
-checkAllBaseClasses varClass functionName arguments program = case(findFunction varClass functionName arguments program) of
-                                                                    Just returnType -> Just returnType
-                                                                    Nothing -> checkAllBaseClasses (getParentClass varClass program) functionName arguments program  
 
+--Determina tipul unui apel de functie
+infer (FCall varName functionName arguments) program = 
+        --determina tipul variabilei din care se face apelul
+        case (infer (Va varName) program) of
+            Just varClass -> case (inferResult) of
+                                --verifica daca exista functia apelata
+                                --urcand pe lantul mostenirii in cazul in care nu
+                                --exista in clasa curenta
+                                Just inferArgs -> checkAllBaseClasses varClass functionName inferArgs program
+                                Nothing -> Nothing
+            --variabila nu exista
+            Nothing -> Nothing
+        where
+            --rezultatul inferentei de tip pentru fiecare argument al apelului
+            tempResult  = map (\expr -> infer expr program) arguments
+            --daca macar unul dintre rezultate este Nothin inseamna ca apelul
+            --este invalid si nu mai putem continua
+            inferResult = if (all (\x -> x /= Nothing) tempResult) 
+                                --converteste fiecare element al listei
+                                --din Just String in String
+                                then Just (map (fromJust) tempResult)
+                                else Nothing
+                                                
+
+--Verifica daca o functie cu prototipul dat exista intr-o anumita clasa/clasele parinte
+checkAllBaseClasses :: String -> String -> [String] -> Program -> Maybe String        
+--Cazul de baza este cand am ajuns la clasa Global         
+--Verificam daca in "Global" exista functia                                        
+checkAllBaseClasses "Global" functionName arguments program = findFunction "Global" functionName arguments program
+
+--Verificam pornind de la clasa folosita pentru apel
+checkAllBaseClasses varClass functionName arguments program = 
+        --verificam daca am gasit functia in clasa curenta
+        case(findFunction varClass functionName arguments program) of
+                --am gasit functia, intoarcem rezultatul evaluarii
+                Just returnType -> Just returnType
+                --nu am gasit functia, cautam in clasele parinte
+                Nothing -> checkAllBaseClasses (getParentClass varClass program) functionName arguments program  
+
+--Verifica daca intr-o clasa exista o functie cu un anumit prototip
 findFunction  :: String -> String -> [String] -> Program -> Maybe String                                                               
-findFunction varClass functionName arguments program = if matchingArguments == []
-                                                                then Nothing
-                                                                else Just ((matchingArguments !! 0) !! 1) --ia primul match
-                                                        where
-                                                            potentialArguments = (getFuncsForClass varClass program)
-                                                            matchingArguments = filter (\l -> (drop 2 l) == arguments) potentialArguments
+findFunction varClass functionName arguments program = 
+        --verifica daca exista o functie/macar o functie(in cazul celor supraincarcate)
+        --care are prototipul corect
+        if matchingArguments == []
+            --nu exista un match
+            then Nothing
+            --intoarce primul rezultat
+            else Just ((matchingArguments !! 0) !! 1)
+        where
+            --lista cu toate prototipurile de functii pe care vrem sa le verificam
+            potentialArguments = (getFuncsForClass varClass program)
+            --filter va lasa doar prototipurile functiilor care se potrivesc
+            matchingArguments = filter (\args -> (drop 2 args) == arguments) potentialArguments
 
 
