@@ -35,7 +35,7 @@ Se primeste o expresie(Expr) sunt forma unui datatype(arbore de expresie), un pr
 expresiei, daca acest lucru este posibil(intoarce Maybe String)<br />
 
 Exemplu:
-Expr: FCall "a” "func" [Va "mydouble", Va "myfloat"] (a.func(mydouble, myfloat))
+Expr: FCall "a” "func" [Va "mydouble", Va "myfloat"] (se traduce la a.func(mydouble, myfloat))
 
 Program:
 class Double
