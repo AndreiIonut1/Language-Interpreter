@@ -35,8 +35,10 @@ expresiei, daca acest lucru este posibil(intoarce Maybe String)
 
 Exemplu:
 Expr: FCall "a” "func" [Va "mydouble", Va "myfloat"] (a.func(mydouble, myfloat))
+
 Program:
 class Double
+
 class A
 newvar a = A
 newvar mydouble = Double
