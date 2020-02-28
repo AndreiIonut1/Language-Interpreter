@@ -45,3 +45,4 @@ Double A::func (Double, Float)
 Double A::func (Float, Float)
 
 Sinteza de tip reuseste: exista functia "func" in clasa A care primeste un Double si un Float. Tipul o sa fie Double.
+
